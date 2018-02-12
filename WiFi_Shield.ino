@@ -61,7 +61,7 @@ enum UpdateStatus {
 */
 
 unsigned long HW_GROUP = 1;               // Changes with hardware changes that require software changes
-unsigned long FW_VERSION = 1802080001;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 1802120001;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
 // HTTPS update settings
@@ -535,6 +535,9 @@ void loop() {
       setLED(1);
       Serial.write(client.read());
       setLED(0);
+    }
+    while (Serial.available()) {
+      client.write(Serial.read());
     }
   }
 
