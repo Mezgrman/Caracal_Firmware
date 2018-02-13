@@ -61,7 +61,7 @@ enum UpdateStatus {
 */
 
 unsigned long HW_GROUP = 1;               // Changes with hardware changes that require software changes
-unsigned long FW_VERSION = 1802120001;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 1802130009;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
 // HTTPS update settings
@@ -357,7 +357,7 @@ void ISR_config() {
 }
 
 /*
-   MAIN PROGRAM ROUTINES
+   PROGRAM ROUTINES
 */
 
 void doWiFiConfigViaWPS() {
@@ -383,6 +383,24 @@ void doWiFiConfigViaAP() {
   AP_ACTIVE = true;
   setLED(1);
 }
+
+void printIPAddress() {
+  // TODO: Stops working after the first time
+  IPAddress addr = WiFi.localIP();
+  String addrStr;
+  addrStr += String(addr[0]);
+  addrStr += ".";
+  addrStr += String(addr[1]);
+  addrStr += ".";
+  addrStr += String(addr[2]);
+  addrStr += ".";
+  addrStr += String(addr[3]);
+  IBIS_DS009(addrStr);
+}
+
+/*
+   FIRMWARE & SPIFFS UPDATE
+*/
 
 UpdateStatus checkForFWUpdate() {
   /*WiFiClientSecure httpsClient;
@@ -450,6 +468,10 @@ void doSPUpdate() {
   String url = UPDATE_URL_BASE + HW_GROUP + "/spiffs.bin";
   t_httpUpdate_return ret = ESPhttpUpdate.updateSpiffs(url);
 }
+
+/*
+   MAIN PROGRAM
+*/
 
 void setup() {
   pinMode(PIN_STATUS, OUTPUT);
@@ -565,6 +587,11 @@ void loop() {
       case 2: {
           // AP mode
           doWiFiConfigViaAP();
+          break;
+        }
+      case 3: {
+          // AP mode
+          printIPAddress();
           break;
         }
       default: {
