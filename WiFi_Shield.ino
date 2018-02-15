@@ -61,7 +61,7 @@ enum UpdateStatus {
 */
 
 unsigned long HW_GROUP = 1;               // Changes with hardware changes that require software changes
-unsigned long FW_VERSION = 1802130009;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 1802150003;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
 // HTTPS update settings
@@ -398,6 +398,14 @@ void printIPAddress() {
   IBIS_DS009(addrStr);
 }
 
+void resetWiFiCredentials() {
+  STA_SSID = "";
+  STA_PASS = "";
+  STA_SETUP = false;
+  saveConfig();
+  ESP.restart();
+}
+
 /*
    FIRMWARE & SPIFFS UPDATE
 */
@@ -592,6 +600,11 @@ void loop() {
       case 3: {
           // AP mode
           printIPAddress();
+          break;
+        }
+      case 10: {
+          // Reset WiFi Credentials
+          resetWiFiCredentials();
           break;
         }
       default: {
