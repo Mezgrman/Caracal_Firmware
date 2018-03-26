@@ -51,8 +51,8 @@ enum UpdateStatus {
    CONSTANTS
 */
 
-#define PIN_STATUS 10
-#define PIN_CONFIG 0
+#define PIN_STATUS   10
+#define PIN_CONFIG    0
 
 #define WIFI_TIMEOUT 10000
 
@@ -61,7 +61,7 @@ enum UpdateStatus {
 */
 
 unsigned long HW_GROUP = 1;               // Changes with hardware changes that require software changes
-unsigned long FW_VERSION = 1802150003;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 1803260003;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
 // HTTPS update settings
@@ -81,7 +81,7 @@ String STA_PASS;
 bool STA_SETUP = false;
 
 // Variables for Access Point WiFi
-String AP_SSID = "xatLabs WiFi Shield";
+String AP_SSID = "xatLabs WiFi Module";
 String AP_PASS = "xatlabs_wifi";
 bool AP_ACTIVE = false;
 
@@ -193,18 +193,18 @@ bool saveConfig() {
    HELPER FUNCTIONS
 */
 
-void setLED(bool state) {
+void setLEDStatus(bool state) {
   digitalWrite(PIN_STATUS, state);
 }
 
-void blinkLEDSingle(unsigned int duration) {
-  setLED(1);
+void blinkLEDStatusSingle(unsigned int duration) {
+  setLEDStatus(1);
   delay(duration);
-  setLED(0);
+  setLEDStatus(0);
 }
 
-void blinkLEDLoop(unsigned int duration) {
-  blinkLEDSingle(duration);
+void blinkLEDStatusLoop(unsigned int duration) {
+  blinkLEDStatusSingle(duration);
   delay(duration);
 }
 
@@ -235,7 +235,7 @@ String formatPageBase(String content) {
   page += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
   page += "<meta charset='UTF-8'>";
   page += "<link rel='stylesheet' href='/main.css'>";
-  page += "<title>WiFi Shield</title>";
+  page += "<title>WiFi Module</title>";
   page += "</head>";
   page += "<body>";
   page += content;
@@ -246,7 +246,7 @@ String formatPageBase(String content) {
 
 void handleRoot() {
   String c;
-  c += "<h1>WiFi Shield</h1>";
+  c += "<h1>WiFi Module</h1>";
   c += "<div>Current SSID: ";
   if (AP_ACTIVE) {
     c += AP_SSID;
@@ -365,14 +365,14 @@ void doWiFiConfigViaWPS() {
   WiFi.mode(WIFI_STA);
   WiFi.beginWPSConfig();
   while (WiFi.status() != WL_CONNECTED) {
-    blinkLEDLoop(250);
+    blinkLEDStatusLoop(250);
   }
   STA_SSID = WiFi.SSID();
   STA_PASS = WiFi.psk();
   STA_SETUP = true;
   saveConfig();
   for (int i = 0; i < 3; i++) {
-    blinkLEDLoop(125);
+    blinkLEDStatusLoop(125);
   }
 }
 
@@ -381,7 +381,7 @@ void doWiFiConfigViaAP() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP(AP_SSID.c_str(), AP_PASS.c_str());
   AP_ACTIVE = true;
-  setLED(1);
+  setLEDStatus(1);
 }
 
 void printIPAddress() {
@@ -443,7 +443,7 @@ UpdateStatus checkForFWUpdate() {
 
 void doFWUpdate() {
   // Set both LEDs on during update
-  setLED(1);
+  setLEDStatus(1);
   pinMode(2, OUTPUT);
   digitalWrite(2, LOW);
   String url = UPDATE_URL_BASE + HW_GROUP + "/firmware.bin";
@@ -470,7 +470,7 @@ UpdateStatus checkForSPUpdate() {
 
 void doSPUpdate() {
   // Set both LEDs on during update
-  setLED(1);
+  setLEDStatus(1);
   pinMode(2, OUTPUT);
   digitalWrite(2, LOW);
   String url = UPDATE_URL_BASE + HW_GROUP + "/spiffs.bin";
@@ -511,7 +511,7 @@ void setup() {
         wifiTimedOut = true;
         break;
       }
-      blinkLEDLoop(250);
+      blinkLEDStatusLoop(250);
     }
     if (wifiTimedOut) {
       // Connection timed out, fall back to AP mode
@@ -537,11 +537,11 @@ void setup() {
   IBIS_init();
 
   for (int i = 0; i < 3; i++) {
-    blinkLEDLoop(125);
+    blinkLEDStatusLoop(125);
   }
 
   if (AP_ACTIVE) {
-    setLED(1);
+    setLEDStatus(1);
   } else {
     if (checkForFWUpdate()) {
       doFWUpdate();
@@ -562,9 +562,9 @@ void loop() {
   if (newClient) client = newClient;
   if (client) {
     while (client.available()) {
-      setLED(1);
+      setLEDStatus(1);
       Serial.write(client.read());
-      setLED(0);
+      setLEDStatus(0);
     }
     while (Serial.available()) {
       client.write(Serial.read());
@@ -574,13 +574,13 @@ void loop() {
   // Handle LED blinking while button is being pressed (visual timing help)
   if (btnState) {
     unsigned long dur = (millis() - btnTimer) % 1000;
-    setLED(dur > 500);
+    setLEDStatus(dur > 500);
   }
 
   // Check if the button has been pressed and for how long
   if (btnPressed) {
     btnPressed = 0;
-    setLED(0);
+    setLEDStatus(0);
     int selectedOption = btnDur / 1000;
     switch (selectedOption) {
       case 0: {
