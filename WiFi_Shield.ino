@@ -90,6 +90,8 @@ volatile bool btnState = 0;           // Current button state
 volatile bool btnPressed = 0;         // Flag to check if the last button press has already been processed
 volatile unsigned long btnTimer = 0;  // Start time of last button press (only while pressed)
 volatile unsigned long btnDur = 0;    // Duration of the last button press (only while released)
+volatile unsigned long lastBtnTimer = 0;
+volatile unsigned long lastMillis = 0;
 
 ESP8266WebServer server(80);
 WiFiServer IBISServer(5001);
@@ -264,6 +266,15 @@ void handleRoot() {
   c += "</table>";
   c += "</form>";
   c += "<a href='/check-update'>Check for firmware update</a>";
+  c += "<p>btnDur = ";
+  c += btnDur;
+  c += "</p>";
+  c += "<p>lastBtnTimer = ";
+  c += lastBtnTimer;
+  c += "</p>";
+  c += "<p>lastMillis = ";
+  c += lastMillis;
+  c += "</p>";
   server.send(200, "text/html", formatPageBase(c));
 }
 
@@ -343,9 +354,11 @@ void ISR_config() {
   // Calculate the last press duration
   if (btnState) {
     btnTimer = millis();
+    lastBtnTimer = btnTimer;
     btnDur = 0;
   } else {
-    btnDur = millis() - btnTimer;
+    lastMillis = millis();
+    btnDur = lastMillis - btnTimer;
     btnTimer = 0;
     // Discard presses <= 50ms
     if (btnDur > 50) {
@@ -482,6 +495,8 @@ void doSPUpdate() {
 */
 
 void setup() {
+  WiFi.mode(WIFI_AP);
+
   pinMode(PIN_STATUS, OUTPUT);
   pinMode(PIN_CONFIG, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(PIN_CONFIG), ISR_config, CHANGE);
@@ -608,6 +623,9 @@ void loop() {
           break;
         }
       default: {
+          for (int i = 0; i < selectedOption; i++) {
+            blinkLEDStatusLoop(125);
+          }
           break;
         }
     }
