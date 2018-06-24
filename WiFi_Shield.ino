@@ -4,6 +4,13 @@
 */
 
 /*
+   IMPORTANT
+
+   For the HTTPS OTA update to work, the verify() method of TLSTraits
+   in ESP8266HTTPClient.cpp needs to be modified to always return true.
+*/
+
+/*
    UPLOAD SETTINGS
 
    Board: Generic ESP8266 Module
@@ -20,9 +27,10 @@
 
 #define ARDUINO_OTA_ENABLEDXXX
 #define INIT_EEPROMXXX
+#define SERIAL_DEBUGXXX
 
 #include <ESP8266WiFi.h>
-//#include <WiFiClientSecure.h>
+#include <WiFiClientSecure.h>
 #include <ESP8266WebServer.h>
 #include <WiFiUdp.h>
 #include <FS.h>
@@ -55,21 +63,31 @@ enum UpdateStatus {
 #define PIN_CONFIG    0
 
 #define WIFI_TIMEOUT 10000
+#define UPDATE_START_DELAY 3000
 
 /*
    GLOBAL VARIABLES
 */
 
 unsigned long HW_GROUP = 1;               // Changes with hardware changes that require software changes
-unsigned long FW_VERSION = 1803260003;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 1806240002;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
-// HTTPS update settings
-//String UPDATE_HOST = "static.mezgrman.de";
-//int UPDATE_PORT = 443;
+// FW & SPIFFS update settings
+const char* UPDATE_HOST = "static.mezgrman.de";
+const int UPDATE_PORT_HTTPS = 443;
+const int UPDATE_PORT_HTTP = 80;
+String UPDATE_PATH_BASE_HTTPS = "/firmware/wifi_shield/";
+String UPDATE_URL_BASE_HTTPS = "https://static.mezgrman.de/firmware/wifi_shield/";
+String UPDATE_URL_BASE_HTTP = "http://static.mezgrman.de/firmware/wifi_shield/";
+String UPDATE_FINGERPRINT_HTTPS = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"; // Not important, will be ignored anyway
 
-// HTTP update settings
-String UPDATE_URL_BASE = "http://static.mezgrman.de/firmware/wifi_shield/";
+// Update flags
+bool updateFWSecure_flag = false;
+bool updateSPSecure_flag = false;
+bool updateFWInsecure_flag = false;
+bool updateSPInsecure_flag = false;
+unsigned long updateFlagSetTimestamp = 0;
 
 // Start time of the last WiFi connection attempt
 unsigned long wifiTimer = 0;
@@ -90,8 +108,6 @@ volatile bool btnState = 0;           // Current button state
 volatile bool btnPressed = 0;         // Flag to check if the last button press has already been processed
 volatile unsigned long btnTimer = 0;  // Start time of last button press (only while pressed)
 volatile unsigned long btnDur = 0;    // Duration of the last button press (only while released)
-volatile unsigned long lastBtnTimer = 0;
-volatile unsigned long lastMillis = 0;
 
 ESP8266WebServer server(80);
 WiFiServer IBISServer(5001);
@@ -134,9 +150,6 @@ bool loadConfig() {
     return false;
   }
 
-  /*STA_SSID = json["WiFiSSID"].as<String>();
-    STA_PASS = json["WiFiPassword"].as<String>();
-    STA_SETUP = json["WiFiSetup"];*/
   SP_VERSION = json["SPVersion"];
 
   char curChar;
@@ -168,9 +181,6 @@ bool loadConfig() {
 bool saveConfig() {
   StaticJsonBuffer<200> jsonBuffer;
   JsonObject& json = jsonBuffer.createObject();
-  /*json["WiFiSSID"] = STA_SSID;
-    json["WiFiPassword"] = STA_PASS;
-    json["WiFiSetup"] = STA_SETUP;*/
   json["SPVersion"] = SP_VERSION;
 
   File configFile = SPIFFS.open("/config.json", "w");
@@ -229,7 +239,7 @@ void handleNotFound() {
   server.send(404, "text/plain", message);
 }
 
-String formatPageBase(String content) {
+String formatPageBaseWithExtraHead(String content, String extraHead) {
   String page;
   page += "<html>";
   page += "<head>";
@@ -238,12 +248,17 @@ String formatPageBase(String content) {
   page += "<meta charset='UTF-8'>";
   page += "<link rel='stylesheet' href='/main.css'>";
   page += "<title>WiFi Module</title>";
+  page += extraHead;
   page += "</head>";
   page += "<body>";
   page += content;
   page += "</body>";
   page += "</html>";
   return page;
+}
+
+String formatPageBase(String content) {
+  return formatPageBaseWithExtraHead(content, "");
 }
 
 void handleRoot() {
@@ -266,15 +281,6 @@ void handleRoot() {
   c += "</table>";
   c += "</form>";
   c += "<a href='/check-update'>Check for firmware update</a>";
-  c += "<p>btnDur = ";
-  c += btnDur;
-  c += "</p>";
-  c += "<p>lastBtnTimer = ";
-  c += lastBtnTimer;
-  c += "</p>";
-  c += "<p>lastMillis = ";
-  c += lastMillis;
-  c += "</p>";
   server.send(200, "text/html", formatPageBase(c));
 }
 
@@ -290,8 +296,10 @@ void handle_wifi_setup() {
 
 void handle_check_update() {
   String c;
-  UpdateStatus fwStatus = checkForFWUpdate();
-  UpdateStatus spStatus = checkForSPUpdate();
+  UpdateStatus fwStatusSecure = checkForUpdateSecure(false);
+  UpdateStatus spStatusSecure = checkForUpdateSecure(true);
+  UpdateStatus fwStatusInsecure = checkForUpdateInsecure(false);
+  UpdateStatus spStatusInsecure = checkForUpdateInsecure(true);
   c += "<h1>Update Status</h1>";
   c += "<table><tr><td>Firmware version:</td>";
   c += "<td>";
@@ -300,13 +308,21 @@ void handle_check_update() {
   c += "-";
   c += FW_VERSION;
   c += "</td>";
-  if (fwStatus == US_AVAILABLE) {
-    c += "<td>Update available</td>";
-    c += "<td><form action='/update-fw' method='post'><input type='submit' value='Update' /></form></td>";
-  } else if (fwStatus == US_FAILED) {
-    c += "<td>Update check failed</td>";
-  } else if (fwStatus == US_NO_UPDATE) {
-    c += "<td>No update available</td>";
+  /*if (fwStatusSecure == US_AVAILABLE) {
+    c += "<td>Update available (HTTPS)</td>";
+    c += "<td><form action='/update-fw-https' method='post'><input type='submit' value='Update (HTTPS)' /></form></td>";
+    } else if (fwStatusSecure == US_FAILED) {
+    c += "<td>Update check failed (HTTPS)</td>";
+    } else if (fwStatusSecure == US_NO_UPDATE) {
+    c += "<td>No update available (HTTPS)</td>";
+    }*/
+  if (fwStatusInsecure == US_AVAILABLE) {
+    c += "<td>Update available (HTTP)</td>";
+    c += "<td><form action='/update-fw-http' method='post'><input type='submit' value='Update (HTTP)' /></form></td>";
+  } else if (fwStatusInsecure == US_FAILED) {
+    c += "<td>Update check failed (HTTP)</td>";
+  } else if (fwStatusInsecure == US_NO_UPDATE) {
+    c += "<td>No update available (HTTP)</td>";
   }
   c += "</tr>";
   c += "<tr><td>Filesystem version:</td>";
@@ -316,32 +332,59 @@ void handle_check_update() {
   c += "-";
   c += SP_VERSION;
   c += "</td>";
-  if (spStatus == US_AVAILABLE) {
-    c += "<td>Update available</td>";
-    c += "<td><form action='/update-sp' method='post'><input type='submit' value='Update' /></form></td>";
-  } else if (spStatus == US_FAILED) {
-    c += "<td>Update check failed</td>";
-  } else if (spStatus == US_NO_UPDATE) {
-    c += "<td>No update available</td>";
+  /*if (spStatusSecure == US_AVAILABLE) {
+    c += "<td>Update available (HTTPS)</td>";
+    c += "<td><form action='/update-sp-https' method='post'><input type='submit' value='Update (HTTPS)' /></form></td>";
+    } else if (spStatusSecure == US_FAILED) {
+    c += "<td>Update check failed (HTTPS)</td>";
+    } else if (spStatusSecure == US_NO_UPDATE) {
+    c += "<td>No update available (HTTPS)</td>";
+    }*/
+  if (spStatusInsecure == US_AVAILABLE) {
+    c += "<td>Update available (HTTP)</td>";
+    c += "<td><form action='/update-sp-http' method='post'><input type='submit' value='Update (HTTP)' /></form></td>";
+  } else if (spStatusInsecure == US_FAILED) {
+    c += "<td>Update check failed (HTTP)</td>";
+  } else if (spStatusInsecure == US_NO_UPDATE) {
+    c += "<td>No update available (HTTP)</td>";
   }
   c += "</tr></table>";
   server.send(200, "text/html", formatPageBase(c));
 }
 
-void handle_update_fw() {
-  server.sendHeader("Location", "/check-update", true);
+void handle_update_fw_https() {
+  updateFWSecure_flag = true;
+  updateFlagSetTimestamp = millis();
+  server.sendHeader("Location", "/update-running", true);
   server.send(303, "text/plain", "");
-  if (checkForFWUpdate() == US_AVAILABLE) {
-    doFWUpdate();
-  }
 }
 
-void handle_update_sp() {
-  server.sendHeader("Location", "/check-update", true);
+void handle_update_sp_https() {
+  updateSPSecure_flag = true;
+  updateFlagSetTimestamp = millis();
+  server.sendHeader("Location", "/update-running", true);
   server.send(303, "text/plain", "");
-  if (checkForSPUpdate() == US_AVAILABLE) {
-    doSPUpdate();
-  }
+}
+
+void handle_update_fw_http() {
+  updateFWInsecure_flag = true;
+  updateFlagSetTimestamp = millis();
+  server.sendHeader("Location", "/update-running", true);
+  server.send(303, "text/plain", "");
+}
+
+void handle_update_sp_http() {
+  updateSPInsecure_flag = true;
+  updateFlagSetTimestamp = millis();
+  server.sendHeader("Location", "/update-running", true);
+  server.send(303, "text/plain", "");
+}
+
+void handle_update_running() {
+  String c;
+  c += "<h1>Update in progress...</h1>";
+  c += "<p>Please wait while the update is being downloaded and installed.</p>";
+  server.send(200, "text/html", formatPageBaseWithExtraHead(c, "<meta http-equiv='refresh' content='5'>"));
 }
 
 /*
@@ -354,11 +397,8 @@ void ISR_config() {
   // Calculate the last press duration
   if (btnState) {
     btnTimer = millis();
-    lastBtnTimer = btnTimer;
     btnDur = 0;
   } else {
-    lastMillis = millis();
-    btnDur = lastMillis - btnTimer;
     btnTimer = 0;
     // Discard presses <= 50ms
     if (btnDur > 50) {
@@ -423,71 +463,160 @@ void resetWiFiCredentials() {
    FIRMWARE & SPIFFS UPDATE
 */
 
-UpdateStatus checkForFWUpdate() {
-  /*WiFiClientSecure httpsClient;
-    if (!httpsClient.connect(UPDATE_HOST.c_str(), UPDATE_PORT)) {
-    //Serial.print("connection failed");
-    }
-    httpsClient.println("GET /firmware/wifi_shield/1/firmware.version HTTP/1.1");
-    httpsClient.println("Host: " + UPDATE_HOST);
-    httpsClient.println("Connection: close");
-    httpsClient.println();
-    delay(1000);
-    while (httpsClient.available()) {
-    String line = httpsClient.readStringUntil('\n');
-    Serial.print(line);
-    }
-    return 2;*/
-  String url = UPDATE_URL_BASE + HW_GROUP + "/firmware.version";
-  HTTPClient httpClient;
-  httpClient.begin(url);
-  int httpCode = httpClient.GET();
-  if (httpCode == 200) {
-    String newFWVersion = httpClient.getString();
-    unsigned long newVersion = newFWVersion.toInt();
-    if (newVersion > FW_VERSION ) {
-      return US_AVAILABLE;
-    }
+UpdateStatus checkForUpdateSecure(bool spiffs) {
+  String url = UPDATE_PATH_BASE_HTTPS + HW_GROUP;
+  if (spiffs) {
+    url += "/spiffs.version";
   } else {
-    return US_FAILED;
+    url += "/firmware.version";
   }
-  return US_NO_UPDATE;
-}
-
-void doFWUpdate() {
-  // Set both LEDs on during update
-  setLEDStatus(1);
-  pinMode(2, OUTPUT);
-  digitalWrite(2, LOW);
-  String url = UPDATE_URL_BASE + HW_GROUP + "/firmware.bin";
-  t_httpUpdate_return ret = ESPhttpUpdate.update(url);
-
-}
-
-UpdateStatus checkForSPUpdate() {
-  String url = UPDATE_URL_BASE + HW_GROUP + "/spiffs.version";
-  HTTPClient httpClient;
-  httpClient.begin(url);
-  int httpCode = httpClient.GET();
-  if (httpCode == 200) {
-    String newSPVersion = httpClient.getString();
-    unsigned long newVersion = newSPVersion.toInt();
+  WiFiClientSecure httpsClient;
+  if (!httpsClient.connect(UPDATE_HOST, UPDATE_PORT_HTTPS)) return US_FAILED;
+  httpsClient.println("GET " + url + " HTTP/1.0");
+  httpsClient.print("Host: ");
+  httpsClient.println(UPDATE_HOST);
+  httpsClient.println("Connection: close");
+  httpsClient.println();
+  while (httpsClient.connected()) {
+    String line = httpsClient.readStringUntil('\n');
+    if (line == "\r") {
+      // Headers received
+      break;
+    }
+  }
+  String newVersionStr = httpsClient.readStringUntil('\n');
+  unsigned long newVersion = newVersionStr.toInt();
+  if (spiffs) {
     if (newVersion > SP_VERSION ) {
       return US_AVAILABLE;
     }
   } else {
+    if (newVersion > FW_VERSION ) {
+      return US_AVAILABLE;
+    }
+  }
+  return US_NO_UPDATE;
+}
+
+UpdateStatus checkForUpdateInsecure(bool spiffs) {
+  String url = UPDATE_URL_BASE_HTTP + HW_GROUP;
+  if (spiffs) {
+    url += "/spiffs.version";
+  } else {
+    url += "/firmware.version";
+  }
+  HTTPClient httpClient;
+  httpClient.begin(url);
+  int httpCode = httpClient.GET();
+  if (httpCode == 200) {
+    String newVersionStr = httpClient.getString();
+    unsigned long newVersion = newVersionStr.toInt();
+    if (spiffs) {
+      if (newVersion > SP_VERSION ) {
+        return US_AVAILABLE;
+      }
+    } else {
+      if (newVersion > FW_VERSION ) {
+        return US_AVAILABLE;
+      }
+    }
+  } else {
     return US_FAILED;
   }
   return US_NO_UPDATE;
 }
 
-void doSPUpdate() {
+UpdateStatus checkForUpdate(bool spiffs) {
+  // First check securely, fallback to insecure
+  UpdateStatus statusSecure = US_FAILED;//checkForUpdateSecure(spiffs);
+  if (statusSecure == US_FAILED) {
+    return checkForUpdateInsecure(spiffs);
+  } else {
+    return statusSecure;
+  }
+}
+
+UpdateStatus checkForFWUpdate() {
+  return checkForUpdate(false);
+}
+
+UpdateStatus checkForSPUpdate() {
+  return checkForUpdate(true);
+}
+
+t_httpUpdate_return doUpdateSecure(bool spiffs) {
   // Set both LEDs on during update
   setLEDStatus(1);
   pinMode(2, OUTPUT);
   digitalWrite(2, LOW);
-  String url = UPDATE_URL_BASE + HW_GROUP + "/spiffs.bin";
-  t_httpUpdate_return ret = ESPhttpUpdate.updateSpiffs(url);
+
+  t_httpUpdate_return ret;
+  String url = UPDATE_URL_BASE_HTTPS + HW_GROUP;
+  if (spiffs) {
+    url += "/spiffs.bin";
+    ret = ESPhttpUpdate.updateSpiffs(url, "", UPDATE_FINGERPRINT_HTTPS);
+  } else {
+    url += "/firmware.bin";
+    ret = ESPhttpUpdate.update(url, "", UPDATE_FINGERPRINT_HTTPS);
+  }
+  if (ret == HTTP_UPDATE_OK) {
+    ESP.restart();
+  }
+  return ret;
+}
+
+t_httpUpdate_return doUpdateInsecure(bool spiffs) {
+  // Set both LEDs on during update
+  setLEDStatus(1);
+  pinMode(2, OUTPUT);
+  digitalWrite(2, LOW);
+
+  t_httpUpdate_return ret;
+  String url = UPDATE_URL_BASE_HTTP + HW_GROUP;
+  if (spiffs) {
+    url += "/spiffs.bin";
+    ret = ESPhttpUpdate.updateSpiffs(url, "");
+  } else {
+    url += "/firmware.bin";
+    ret = ESPhttpUpdate.update(url, "");
+  }
+  if (ret == HTTP_UPDATE_OK) {
+    ESP.restart();
+  }
+  return ret;
+}
+
+void doUpdate(bool spiffs) {
+  // Set both LEDs on during update
+  setLEDStatus(1);
+  pinMode(2, OUTPUT);
+  digitalWrite(2, LOW);
+
+  t_httpUpdate_return ret;
+  // Try secure update first
+  ret = HTTP_UPDATE_FAILED;//doUpdateSecure(spiffs);
+
+  if (ret == HTTP_UPDATE_FAILED) {
+    // Failover to insecure update
+    ret = doUpdateInsecure(spiffs);
+
+    if (ret == HTTP_UPDATE_FAILED) {
+      setLEDStatus(0);
+      digitalWrite(2, LOW);
+      pinMode(2, INPUT);
+      for (int i = 0; i < 3; i++) {
+        blinkLEDStatusLoop(750);
+      }
+    }
+  }
+}
+
+void doFWUpdate() {
+  doUpdate(false);
+}
+
+void doSPUpdate() {
+  doUpdate(true);
 }
 
 /*
@@ -537,19 +666,30 @@ void setup() {
     doWiFiConfigViaAP();
   }
 
+  // Set up time
+  configTime(1 * 3600, 0, "pool.ntp.org");
+
   IBISServer.begin();
 
   server.onNotFound(handleNotFound);
   server.on("/", handleRoot);
   server.on("/wifi-setup", handle_wifi_setup);
   server.on("/check-update", handle_check_update);
-  server.on("/update-fw", handle_update_fw);
-  server.on("/update-sp", handle_update_sp);
+  server.on("/update-fw-https", handle_update_fw_https);
+  server.on("/update-sp-https", handle_update_sp_https);
+  server.on("/update-fw-http", handle_update_fw_http);
+  server.on("/update-sp-http", handle_update_sp_http);
+  server.on("/update-running", handle_update_running);
   server.serveStatic("/main.css", SPIFFS, "/main.css");
   server.serveStatic("/favicon.ico", SPIFFS, "/favicon.ico");
   server.begin();
 
+#ifdef SERIAL_DEBUG
+  Serial.begin(115200);
+  Serial.setDebugOutput(1);
+#else
   IBIS_init();
+#endif
 
   for (int i = 0; i < 3; i++) {
     blinkLEDStatusLoop(125);
@@ -558,10 +698,10 @@ void setup() {
   if (AP_ACTIVE) {
     setLEDStatus(1);
   } else {
-    if (checkForFWUpdate()) {
+    if (checkForFWUpdate() == US_AVAILABLE) {
       doFWUpdate();
     }
-    if (checkForSPUpdate()) {
+    if (checkForSPUpdate() == US_AVAILABLE) {
       doSPUpdate();
     }
   }
@@ -590,6 +730,45 @@ void loop() {
   if (btnState) {
     unsigned long dur = (millis() - btnTimer) % 1000;
     setLEDStatus(dur > 500);
+  }
+
+  // Update a certain time after flag is set
+  // (to give the web server time to send the redirect after initiating the update)
+  if (updateFWSecure_flag) {
+    if (millis() - updateFlagSetTimestamp >= UPDATE_START_DELAY) {
+      updateFWSecure_flag = false;
+      updateFlagSetTimestamp = 0;
+      if (checkForUpdateSecure(false) == US_AVAILABLE) {
+        doUpdateSecure(false);
+      }
+    }
+  }
+  if (updateSPSecure_flag) {
+    if (millis() - updateFlagSetTimestamp >= UPDATE_START_DELAY) {
+      updateSPSecure_flag = false;
+      updateFlagSetTimestamp = 0;
+      if (checkForUpdateSecure(true) == US_AVAILABLE) {
+        doUpdateSecure(true);
+      }
+    }
+  }
+  if (updateFWInsecure_flag) {
+    if (millis() - updateFlagSetTimestamp >= UPDATE_START_DELAY) {
+      updateFWInsecure_flag = false;
+      updateFlagSetTimestamp = 0;
+      if (checkForUpdateInsecure(false) == US_AVAILABLE) {
+        doUpdateInsecure(false);
+      }
+    }
+  }
+  if (updateSPInsecure_flag) {
+    if (millis() - updateFlagSetTimestamp >= UPDATE_START_DELAY) {
+      updateSPInsecure_flag = false;
+      updateFlagSetTimestamp = 0;
+      if (checkForUpdateInsecure(true) == US_AVAILABLE) {
+        doUpdateInsecure(true);
+      }
+    }
   }
 
   // Check if the button has been pressed and for how long
@@ -623,9 +802,6 @@ void loop() {
           break;
         }
       default: {
-          for (int i = 0; i < selectedOption; i++) {
-            blinkLEDStatusLoop(125);
-          }
           break;
         }
     }
