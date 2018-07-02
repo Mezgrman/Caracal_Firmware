@@ -70,7 +70,7 @@ enum UpdateStatus {
 */
 
 unsigned long HW_GROUP = 1;               // Changes with hardware changes that require software changes
-unsigned long FW_VERSION = 1806240002;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 1807020001;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
 // FW & SPIFFS update settings
@@ -399,6 +399,7 @@ void ISR_config() {
     btnTimer = millis();
     btnDur = 0;
   } else {
+    btnDur = millis() - btnTimer;
     btnTimer = 0;
     // Discard presses <= 50ms
     if (btnDur > 50) {
