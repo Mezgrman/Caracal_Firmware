@@ -70,7 +70,7 @@ enum UpdateStatus {
 */
 
 unsigned long HW_GROUP = 1;               // Changes with hardware changes that require software changes
-unsigned long FW_VERSION = 1808070002;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 1808070003;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
 // FW & SPIFFS update settings
@@ -456,6 +456,8 @@ void printIPAddress() {
   addrStr += ".";
   addrStr += String(addr[3]);
   IBIS_DS009(addrStr);
+  IBIS_DS003c(addrStr);
+  IBIS_GSP(1, "WLAN-Modul", addrStr);
 }
 
 void resetWiFiCredentials() {
