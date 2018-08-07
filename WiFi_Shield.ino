@@ -70,7 +70,7 @@ enum UpdateStatus {
 */
 
 unsigned long HW_GROUP = 1;               // Changes with hardware changes that require software changes
-unsigned long FW_VERSION = 1807020001;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 1808070002;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
 // FW & SPIFFS update settings
@@ -105,6 +105,7 @@ bool AP_ACTIVE = false;
 
 // Variables for keeping track of the config button
 volatile bool btnState = 0;           // Current button state
+bool oldBtnState = 0;                 // Previous button state
 volatile bool btnPressed = 0;         // Flag to check if the last button press has already been processed
 volatile unsigned long btnTimer = 0;  // Start time of last button press (only while pressed)
 volatile unsigned long btnDur = 0;    // Duration of the last button press (only while released)
@@ -220,6 +221,25 @@ void blinkLEDStatusLoop(unsigned int duration) {
   delay(duration);
 }
 
+void handleConfigButton() {
+  // Read the config button state to determine if it has been pressed or released
+  btnState = !digitalRead(PIN_CONFIG);
+  // Calculate the last press duration
+  if (btnState) {
+    btnTimer = millis();
+    btnDur = 0;
+  } else {
+    btnDur = millis() - btnTimer;
+    btnTimer = 0;
+    // Discard presses <= 50ms
+    if (btnDur > 50) {
+      btnPressed = 1;
+    } else {
+      btnDur = 0;
+    }
+  }
+}
+
 /*
    WEB SERVER
 */
@@ -251,6 +271,7 @@ String formatPageBaseWithExtraHead(String content, String extraHead) {
   page += extraHead;
   page += "</head>";
   page += "<body>";
+  page += "<img id='logo' src='/xatlabs_logo.png'>";
   page += content;
   page += "</body>";
   page += "</html>";
@@ -392,22 +413,7 @@ void handle_update_running() {
 */
 
 void ISR_config() {
-  // Read the config button state to determine if it has been pressed or released
-  btnState = !digitalRead(PIN_CONFIG);
-  // Calculate the last press duration
-  if (btnState) {
-    btnTimer = millis();
-    btnDur = 0;
-  } else {
-    btnDur = millis() - btnTimer;
-    btnTimer = 0;
-    // Discard presses <= 50ms
-    if (btnDur > 50) {
-      btnPressed = 1;
-    } else {
-      btnDur = 0;
-    }
-  }
+  handleConfigButton();
 }
 
 /*
@@ -629,7 +635,7 @@ void setup() {
 
   pinMode(PIN_STATUS, OUTPUT);
   pinMode(PIN_CONFIG, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(PIN_CONFIG), ISR_config, CHANGE);
+  //attachInterrupt(digitalPinToInterrupt(PIN_CONFIG), ISR_config, CHANGE);
 
 #ifdef ARDUINO_OTA_ENABLED
   ArduinoOTA.setHostname("WiFi-Shield");
@@ -683,6 +689,7 @@ void setup() {
   server.on("/update-running", handle_update_running);
   server.serveStatic("/main.css", SPIFFS, "/main.css");
   server.serveStatic("/favicon.ico", SPIFFS, "/favicon.ico");
+  server.serveStatic("/xatlabs_logo.png", SPIFFS, "/xatlabs_logo.png");
   server.begin();
 
 #ifdef SERIAL_DEBUG
@@ -713,6 +720,12 @@ void loop() {
   ArduinoOTA.handle();
 #endif
   server.handleClient();
+
+  btnState = !digitalRead(PIN_CONFIG);
+  if (btnState != oldBtnState) {
+    oldBtnState = btnState;
+    handleConfigButton();
+  }
 
   WiFiClient newClient = IBISServer.available();
   if (newClient) client = newClient;

@@ -6,3 +6,7 @@ body {
 form {
   margin: 0;
 }
+
+#logo {
+  display: block;
+}
