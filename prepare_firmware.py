@@ -10,16 +10,20 @@ import os
 import re
 import time
 
-with open("WiFi_Shield.ino", 'r') as f:
+with open("Caracal_Firmware.ino", 'r') as f:
     code = f.read()
+    
+match = re.search(r"#define HW_GROUP (\d+)", code)
+hw_version = match.group(1)
 
 match = re.search(r"FW_VERSION = (\d+);", code)
 fw_version = match.group(1)
 
-with open("firmware.version", 'w') as f:
-    f.write(fw_version)
+fname = "firmware{}.bin".format(hw_version)
+if os.path.exists("Caracal_Firmware.ino.generic.bin"):
+    if os.path.exists(fname):
+        os.remove(fname)
+    os.rename("Caracal_Firmware.ino.generic.bin", fname)
 
-if os.path.exists("WiFi_Shield.ino.generic.bin"):
-    if os.path.exists("firmware.bin"):
-        os.remove("firmware.bin")
-    os.rename("WiFi_Shield.ino.generic.bin", "firmware.bin")
+    with open("firmware{}.version".format(hw_version), 'w') as f:
+        f.write(fw_version)

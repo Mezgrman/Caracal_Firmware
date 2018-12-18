@@ -59,8 +59,19 @@ enum UpdateStatus {
    CONSTANTS
 */
 
-#define PIN_STATUS   10
+#define HW_GROUP 2 // Changes with hardware changes that require software changes
+
+#if HW_GROUP == 1
+#define PIN_STATUS    10
+#define PIN_ACTIVITY   9 // Unusable
+#define PIN_CONFIG     0
+#endif
+
+#if HW_GROUP == 2
+#define PIN_STATUS    5
+#define PIN_ACTIVITY  4
 #define PIN_CONFIG    0
+#endif
 
 #define WIFI_TIMEOUT 10000
 #define UPDATE_START_DELAY 3000
@@ -69,8 +80,7 @@ enum UpdateStatus {
    GLOBAL VARIABLES
 */
 
-unsigned long HW_GROUP = 1;               // Changes with hardware changes that require software changes
-unsigned long FW_VERSION = 1808070003;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 1812180001;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
 // FW & SPIFFS update settings
@@ -218,6 +228,25 @@ void blinkLEDStatusSingle(unsigned int duration) {
 
 void blinkLEDStatusLoop(unsigned int duration) {
   blinkLEDStatusSingle(duration);
+  delay(duration);
+}
+
+void setLEDActivity(bool state) {
+#if HW_GROUP == 1
+  digitalWrite(PIN_STATUS, state);
+#else
+  digitalWrite(PIN_ACTIVITY, state);
+#endif
+}
+
+void blinkLEDActivitySingle(unsigned int duration) {
+  setLEDActivity(1);
+  delay(duration);
+  setLEDActivity(0);
+}
+
+void blinkLEDActivityLoop(unsigned int duration) {
+  blinkLEDActivitySingle(duration);
   delay(duration);
 }
 
@@ -598,6 +627,7 @@ t_httpUpdate_return doUpdateInsecure(bool spiffs) {
 void doUpdate(bool spiffs) {
   // Set both LEDs on during update
   setLEDStatus(1);
+  setLEDActivity(1);
   pinMode(2, OUTPUT);
   digitalWrite(2, LOW);
 
@@ -636,6 +666,9 @@ void setup() {
   WiFi.mode(WIFI_AP);
 
   pinMode(PIN_STATUS, OUTPUT);
+#if HW_GROUP != 1
+  pinMode(PIN_ACTIVITY, OUTPUT);
+#endif
   pinMode(PIN_CONFIG, INPUT_PULLUP);
   //attachInterrupt(digitalPinToInterrupt(PIN_CONFIG), ISR_config, CHANGE);
 
@@ -702,7 +735,8 @@ void setup() {
 #endif
 
   for (int i = 0; i < 3; i++) {
-    blinkLEDStatusLoop(125);
+    blinkLEDStatusLoop(60);
+    blinkLEDActivityLoop(60);
   }
 
   if (AP_ACTIVE) {
@@ -733,12 +767,14 @@ void loop() {
   if (newClient) client = newClient;
   if (client) {
     while (client.available()) {
-      setLEDStatus(1);
+      setLEDActivity(1);
       Serial.write(client.read());
-      setLEDStatus(0);
+      setLEDActivity(0);
     }
     while (Serial.available()) {
+      setLEDActivity(1);
       client.write(Serial.read());
+      setLEDActivity(0);
     }
   }
 
