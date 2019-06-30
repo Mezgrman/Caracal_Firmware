@@ -38,6 +38,7 @@
 #include <ArduinoJson.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266httpUpdate.h>
+#include <ESP8266mDNS.h>
 
 #ifdef ARDUINO_OTA_ENABLED
 #include <ArduinoOTA.h>
@@ -75,12 +76,13 @@ enum UpdateStatus {
 
 #define WIFI_TIMEOUT 10000
 #define UPDATE_START_DELAY 3000
+#define EEPROM_SIZE 128
 
 /*
    GLOBAL VARIABLES
 */
 
-unsigned long FW_VERSION = 1812180001;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 1906300001;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
 // FW & SPIFFS update settings
@@ -106,6 +108,8 @@ bool wifiTimedOut = false;
 // Variables for Station WiFi
 String STA_SSID;
 String STA_PASS;
+String STA_HOSTNAME;
+char STA_HOSTNAME_CHAR[33];
 bool STA_SETUP = false;
 
 // Variables for Access Point WiFi
@@ -129,7 +133,14 @@ WiFiClient client;
 */
 
 void reset_EEPROM() {
-  for (byte i = 0; i < 96; i++) {
+  for (byte i = 0; i < EEPROM_SIZE; i++) {
+    EEPROM.write(i, 0x00);
+  }
+  EEPROM.commit();
+}
+
+void reset_EEPROM(uint16_t startAddress, uint16_t endAddress) {
+  for (uint16_t i = startAddress; (i < EEPROM_SIZE && i < endAddress); i++) {
     EEPROM.write(i, 0x00);
   }
   EEPROM.commit();
@@ -166,6 +177,7 @@ bool loadConfig() {
   char curChar;
   bool ssidSetup = false;
   bool passSetup = false;
+  bool hostnameSetup = false;
   STA_SSID = "";
   for (byte i = 0; i < 32; i++) {
     curChar = EEPROM.read(i);
@@ -184,6 +196,17 @@ bool loadConfig() {
     STA_PASS += curChar;
     passSetup = true;
   }
+  STA_HOSTNAME = "";
+  for (byte i = 0; i < 32; i++) {
+    curChar = EEPROM.read(i + 96);
+    if (curChar == 0x00) {
+      break;
+    }
+    STA_HOSTNAME += curChar;
+    hostnameSetup = true;
+  }
+  if (STA_HOSTNAME == "") STA_HOSTNAME = "xatLabs-WiFi-Module";
+  STA_HOSTNAME.toCharArray(STA_HOSTNAME_CHAR, 32);
   STA_SETUP = (ssidSetup && passSetup);
 
   return true;
@@ -206,6 +229,9 @@ bool saveConfig() {
   }
   for (byte i = 0; i < STA_PASS.length(); i++) {
     EEPROM.write(i + 32, STA_PASS.charAt(i));
+  }
+  for (byte i = 0; i < STA_HOSTNAME.length(); i++) {
+    EEPROM.write(i + 96, STA_HOSTNAME.charAt(i));
   }
   EEPROM.commit();
 
@@ -314,7 +340,8 @@ String formatPageBase(String content) {
 void handleRoot() {
   String c;
   c += "<h1>WiFi Module</h1>";
-  c += "<div>Current SSID: ";
+  c += "<h2>WiFi Setup</h2>";
+  c += "<div>Current SSID: <b>";
   if (AP_ACTIVE) {
     c += AP_SSID;
   } else if (STA_SETUP) {
@@ -322,11 +349,27 @@ void handleRoot() {
   } else {
     c += "None";
   }
-  c += "</div>";
+  c += "</b></div>";
   c += "<form action='/wifi-setup' method='post'>";
   c += "<table>";
-  c += "<tr><td>SSID</td><td><input type='text' name='ssid' /></td></tr>";
-  c += "<tr><td>Password</td><td><input type='password' name='password' /></td></tr>";
+  c += "<tr><td>SSID</td><td><input type='text' name='ssid' maxlength='32' /></td></tr>";
+  c += "<tr><td>Password</td><td><input type='password' name='password' maxlength='64' /></td></tr>";
+  c += "<tr><td><input type='submit' value='Save and Reboot' /></td></tr>";
+  c += "</table>";
+  c += "</form>";
+  c += "<h2>Hostname Setup</h2>";
+  c += "<div>Current Hostname: <b>";
+  c += STA_HOSTNAME;
+  c += "</b></div>";
+  c += "<div>Attention! Valid characters: A-Z, a-z, 0-9 and -</div>";
+  c += "<div>You can use this to access the WiFi Module at <a href='http://";
+  c += STA_HOSTNAME;
+  c += ".local/'>http://";
+  c += STA_HOSTNAME;
+  c += ".local/</a></div>";
+  c += "<form action='/hostname-setup' method='post'>";
+  c += "<table>";
+  c += "<tr><td>Hostname</td><td><input type='text' name='hostname' maxlength='32' /></td></tr>";
   c += "<tr><td><input type='submit' value='Save and Reboot' /></td></tr>";
   c += "</table>";
   c += "</form>";
@@ -338,6 +381,15 @@ void handle_wifi_setup() {
   STA_SSID = server.arg("ssid");
   STA_PASS = server.arg("password");
   STA_SETUP = true;
+  saveConfig();
+  server.sendHeader("Location", "/", true);
+  server.send(303, "text/plain", "");
+  ESP.restart();
+}
+
+void handle_hostname_setup() {
+  STA_HOSTNAME = server.arg("hostname");
+  STA_HOSTNAME.toCharArray(STA_HOSTNAME_CHAR, 32);
   saveConfig();
   server.sendHeader("Location", "/", true);
   server.send(303, "text/plain", "");
@@ -492,6 +544,7 @@ void printIPAddress() {
 void resetWiFiCredentials() {
   STA_SSID = "";
   STA_PASS = "";
+  STA_HOSTNAME = "xatLabs-WiFi-Module";
   STA_SETUP = false;
   saveConfig();
   ESP.restart();
@@ -672,12 +725,12 @@ void setup() {
   pinMode(PIN_CONFIG, INPUT_PULLUP);
   //attachInterrupt(digitalPinToInterrupt(PIN_CONFIG), ISR_config, CHANGE);
 
-#ifdef ARDUINO_OTA_ENABLED
-  ArduinoOTA.setHostname("WiFi-Shield");
-  ArduinoOTA.begin();
-#endif
+  EEPROM.begin(EEPROM_SIZE); // 32 for SSID, 64 for PSK, 32 for hostname
 
-  EEPROM.begin(96); // 96 bytes - 32 for SSID, 64 for PSK
+  // Reset hostname area of EEPROM if required
+  if (EEPROM.read(96) == 0xff) {
+    reset_EEPROM(96, 128);
+  }
 
 #ifdef INIT_EEPROM
   reset_EEPROM();
@@ -686,6 +739,11 @@ void setup() {
   SPIFFS.begin();
 
   loadConfig();
+
+#ifdef ARDUINO_OTA_ENABLED
+  ArduinoOTA.setHostname(STA_HOSTNAME);
+  ArduinoOTA.begin();
+#endif
 
   if (STA_SETUP) {
     // WiFi connection has been set up
@@ -702,6 +760,9 @@ void setup() {
     if (wifiTimedOut) {
       // Connection timed out, fall back to AP mode
       doWiFiConfigViaAP();
+    } else {
+      // Connected
+      WiFi.hostname(STA_HOSTNAME);
     }
   } else {
     // No WiFi connection has yet been set up, enter AP mode
@@ -711,11 +772,15 @@ void setup() {
   // Set up time
   configTime(1 * 3600, 0, "pool.ntp.org");
 
+  // Set up mDNS responder
+  MDNS.begin(STA_HOSTNAME_CHAR);
+
   IBISServer.begin();
 
   server.onNotFound(handleNotFound);
   server.on("/", handleRoot);
   server.on("/wifi-setup", handle_wifi_setup);
+  server.on("/hostname-setup", handle_hostname_setup);
   server.on("/check-update", handle_check_update);
   server.on("/update-fw-https", handle_update_fw_https);
   server.on("/update-sp-https", handle_update_sp_https);
