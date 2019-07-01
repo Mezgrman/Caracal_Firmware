@@ -82,7 +82,7 @@ enum UpdateStatus {
    GLOBAL VARIABLES
 */
 
-unsigned long FW_VERSION = 1906300001;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 1907010001;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
 // FW & SPIFFS update settings
@@ -116,6 +116,9 @@ bool STA_SETUP = false;
 String AP_SSID = "xatLabs WiFi Module";
 String AP_PASS = "xatlabs_wifi";
 bool AP_ACTIVE = false;
+
+// Variable for keeping track of the IP address
+String IP_ADDRESS;
 
 // Variables for keeping track of the config button
 volatile bool btnState = 0;           // Current button state
@@ -341,7 +344,7 @@ void handleRoot() {
   String c;
   c += "<h1>WiFi Module</h1>";
   c += "<h2>WiFi Setup</h2>";
-  c += "<div>Current SSID: <b>";
+  c += "<div>Current network: <b>";
   if (AP_ACTIVE) {
     c += AP_SSID;
   } else if (STA_SETUP) {
@@ -352,7 +355,7 @@ void handleRoot() {
   c += "</b></div>";
   c += "<form action='/wifi-setup' method='post'>";
   c += "<table>";
-  c += "<tr><td>SSID</td><td><input type='text' name='ssid' maxlength='32' /></td></tr>";
+  c += "<tr><td>Network Name</td><td><input type='text' name='ssid' maxlength='32' /></td></tr>";
   c += "<tr><td>Password</td><td><input type='password' name='password' maxlength='64' /></td></tr>";
   c += "<tr><td><input type='submit' value='Save and Reboot' /></td></tr>";
   c += "</table>";
@@ -362,11 +365,16 @@ void handleRoot() {
   c += STA_HOSTNAME;
   c += "</b></div>";
   c += "<div>Attention! Valid characters: A-Z, a-z, 0-9 and -</div>";
-  c += "<div>You can use this to access the WiFi Module at <a href='http://";
+  c += "<div>You can use this to access the WiFi Module at <b><a href='http://";
   c += STA_HOSTNAME;
   c += ".local/'>http://";
   c += STA_HOSTNAME;
-  c += ".local/</a></div>";
+  c += ".local/</a></b></div>";
+  c += "<div>Alternatively, you can use the IP address: <b><a href='http://";
+  c += IP_ADDRESS;
+  c += "/'>";
+  c += IP_ADDRESS;
+  c += "</a></b></div>";
   c += "<form action='/hostname-setup' method='post'>";
   c += "<table>";
   c += "<tr><td>Hostname</td><td><input type='text' name='hostname' maxlength='32' /></td></tr>";
@@ -518,8 +526,13 @@ void doWiFiConfigViaWPS() {
 }
 
 void doWiFiConfigViaAP() {
+  IPAddress apIP(192, 168, 4, 1);
+  IPAddress apSubnet(255, 255, 255, 0);
+  IP_ADDRESS = apIP.toString();
+
   WiFi.disconnect();
   WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(apIP, apIP, apSubnet);
   WiFi.softAP(AP_SSID.c_str(), AP_PASS.c_str());
   AP_ACTIVE = true;
   setLEDStatus(1);
@@ -527,18 +540,9 @@ void doWiFiConfigViaAP() {
 
 void printIPAddress() {
   // TODO: Stops working after the first time
-  IPAddress addr = WiFi.localIP();
-  String addrStr;
-  addrStr += String(addr[0]);
-  addrStr += ".";
-  addrStr += String(addr[1]);
-  addrStr += ".";
-  addrStr += String(addr[2]);
-  addrStr += ".";
-  addrStr += String(addr[3]);
-  IBIS_DS009(addrStr);
-  IBIS_DS003c(addrStr);
-  IBIS_GSP(1, "WLAN-Modul", addrStr);
+  IBIS_DS009(IP_ADDRESS);
+  IBIS_DS003c(IP_ADDRESS);
+  IBIS_GSP(1, "WLAN-Modul", IP_ADDRESS);
 }
 
 void resetWiFiCredentials() {
@@ -763,6 +767,7 @@ void setup() {
     } else {
       // Connected
       WiFi.hostname(STA_HOSTNAME);
+      IP_ADDRESS = WiFi.localIP().toString();
     }
   } else {
     // No WiFi connection has yet been set up, enter AP mode
