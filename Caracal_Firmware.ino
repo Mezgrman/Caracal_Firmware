@@ -74,15 +74,17 @@ enum UpdateStatus {
 #define PIN_CONFIG    0
 #endif
 
-#define WIFI_TIMEOUT 10000
 #define UPDATE_START_DELAY 3000
-#define EEPROM_SIZE 128
+#define EEPROM_SIZE 129
+
+#define DEFAULT_HOSTNAME "xatLabs-WiFi-Module"
+#define DEFAULT_STA_TIMEOUT 10
 
 /*
    GLOBAL VARIABLES
 */
 
-unsigned long FW_VERSION = 1907010001;    // Changes with each release; must always increase
+unsigned long FW_VERSION = 2011110001;    // Changes with each release; must always increase
 unsigned long SP_VERSION = 0;             // Loaded from SPIFFS; changed with each SPIFFS build; must always increase (uses timestamp as version)
 
 // FW & SPIFFS update settings
@@ -111,6 +113,7 @@ String STA_PASS;
 String STA_HOSTNAME;
 char STA_HOSTNAME_CHAR[33];
 bool STA_SETUP = false;
+unsigned char STA_TIMEOUT = DEFAULT_STA_TIMEOUT;
 
 // Variables for Access Point WiFi
 String AP_SSID = "xatLabs WiFi Module";
@@ -208,8 +211,9 @@ bool loadConfig() {
     STA_HOSTNAME += curChar;
     hostnameSetup = true;
   }
-  if (STA_HOSTNAME == "") STA_HOSTNAME = "xatLabs-WiFi-Module";
+  if (STA_HOSTNAME == "") STA_HOSTNAME = DEFAULT_HOSTNAME;
   STA_HOSTNAME.toCharArray(STA_HOSTNAME_CHAR, 32);
+  STA_TIMEOUT = EEPROM.read(128);
   STA_SETUP = (ssidSetup && passSetup);
 
   return true;
@@ -236,6 +240,7 @@ bool saveConfig() {
   for (byte i = 0; i < STA_HOSTNAME.length(); i++) {
     EEPROM.write(i + 96, STA_HOSTNAME.charAt(i));
   }
+  EEPROM.write(128, STA_TIMEOUT);
   EEPROM.commit();
 
   return true;
@@ -357,6 +362,9 @@ void handleRoot() {
   c += "<table>";
   c += "<tr><td>Network Name</td><td><input type='text' name='ssid' maxlength='32' /></td></tr>";
   c += "<tr><td>Password</td><td><input type='password' name='password' maxlength='64' /></td></tr>";
+  c += "<tr><td>Timeout</td><td><input type='text' name='timeout' maxlength='3' value='";
+  c += String(STA_TIMEOUT);
+  c += "' /> sec (5 to 254)</td></tr>";
   c += "<tr><td><input type='submit' value='Save and Reboot' /></td></tr>";
   c += "</table>";
   c += "</form>";
@@ -388,6 +396,9 @@ void handleRoot() {
 void handle_wifi_setup() {
   STA_SSID = server.arg("ssid");
   STA_PASS = server.arg("password");
+  String timeoutStr = server.arg("timeout");
+  unsigned int timeout = atoi(timeoutStr.c_str());
+  STA_TIMEOUT = (timeout >= 5 && timeout <= 254) ? timeout : STA_TIMEOUT;
   STA_SETUP = true;
   saveConfig();
   server.sendHeader("Location", "/", true);
@@ -545,10 +556,11 @@ void printIPAddress() {
   IBIS_GSP(1, "WLAN-Modul", IP_ADDRESS);
 }
 
-void resetWiFiCredentials() {
+void resetWiFiSettings() {
   STA_SSID = "";
   STA_PASS = "";
-  STA_HOSTNAME = "xatLabs-WiFi-Module";
+  STA_HOSTNAME = DEFAULT_HOSTNAME;
+  STA_TIMEOUT = DEFAULT_STA_TIMEOUT;
   STA_SETUP = false;
   saveConfig();
   ESP.restart();
@@ -729,11 +741,17 @@ void setup() {
   pinMode(PIN_CONFIG, INPUT_PULLUP);
   //attachInterrupt(digitalPinToInterrupt(PIN_CONFIG), ISR_config, CHANGE);
 
-  EEPROM.begin(EEPROM_SIZE); // 32 for SSID, 64 for PSK, 32 for hostname
+  EEPROM.begin(EEPROM_SIZE); // 32 for SSID, 64 for PSK, 32 for hostname, 1 for timeout
 
   // Reset hostname area of EEPROM if required
   if (EEPROM.read(96) == 0xff) {
     reset_EEPROM(96, 128);
+  }
+
+  // Reset timeout byte of EEPROM if required
+  if (EEPROM.read(128) == 0xff) {
+    EEPROM.write(128, STA_TIMEOUT);
+    EEPROM.commit();
   }
 
 #ifdef INIT_EEPROM
@@ -755,7 +773,7 @@ void setup() {
     WiFi.begin(STA_SSID.c_str(), STA_PASS.c_str());
     wifiTimer = millis();
     while (WiFi.status() != WL_CONNECTED) {
-      if ((millis() - wifiTimer) > WIFI_TIMEOUT) {
+      if ((millis() - wifiTimer) > STA_TIMEOUT * 1000) {
         wifiTimedOut = true;
         break;
       }
@@ -920,7 +938,7 @@ void loop() {
         }
       case 10: {
           // Reset WiFi Credentials
-          resetWiFiCredentials();
+          resetWiFiSettings();
           break;
         }
       default: {
@@ -929,4 +947,3 @@ void loop() {
     }
   }
 }
-
